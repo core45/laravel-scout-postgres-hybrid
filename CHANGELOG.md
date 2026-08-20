@@ -5,6 +5,22 @@ All notable changes to this package are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-08-20
+
+### Fixed
+
+- **The bundled skill is now discoverable by `php artisan boost:install`.** It shipped in
+  1.1.0 at `skills/using-scout-postgres-hybrid/SKILL.md`, which is the Claude Code plugin
+  convention rather than the Laravel package one — Laravel Boost globs
+  `<package>/resources/boost/skills/` and `<package>/resources/boost/guidelines/`, so it
+  never saw the file and offered nothing. The skill now lives at
+  `resources/boost/skills/scout-postgres-development/`, with its detail in
+  `references/scout-postgres-guide.md` and a short `resources/boost/guidelines/core.blade.php`
+  alongside it. The old directory is removed rather than duplicated, so the two cannot
+  drift.
+
+No code changed in this release.
+
 ## [1.1.0] - 2026-08-20
 
 An independent adversarial review of 1.0.0 found nine defects, three of them

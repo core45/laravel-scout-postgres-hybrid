@@ -1,11 +1,4 @@
----
-name: using-scout-postgres-hybrid
-description: Use when integrating, configuring or debugging the core45/laravel-scout-postgres-hybrid Scout engine — declaring document types, implementing toSearchDocuments(), binding scope contracts for multi-tenancy, wiring an EmbeddingProvider, or diagnosing empty search results.
----
-
-# Using laravel-scout-postgres-hybrid
-
-## What the package is
+# core45/laravel-scout-postgres-hybrid Guide
 
 A Laravel Scout engine for PostgreSQL. It fuses three retrieval branches into one ranked
 result set:
@@ -19,6 +12,9 @@ The branches are fused with reciprocal rank fusion (RRF): a document that ranks 
 all three beats one that spikes in a single branch. One migration produces both a
 single-tenant and a multi-tenant schema, selected entirely by config — nothing else in the
 package branches on tenancy mode.
+
+Requires PHP 8.3+, Laravel 12/13, Scout 11, and PostgreSQL 14+ with the `vector`, `pg_trgm`
+and `unaccent` extensions.
 
 ## Integration checklist
 
@@ -139,6 +135,11 @@ Follow in order; steps 6–7 are conditional.
    `scope.mode => 'column'` (plus `column`, `table`, `foreign_key`, `on_delete`, `nullable`) in
    `config/scout-postgres.php`; `'mode' => 'none'` is the single-tenant default.
 
+   Scope values are **validated, not cast**: a numeric-looking string reaching
+   `ScopeResolver::normalize()` throws rather than being silently cast to an integer. This
+   closed a real defect in 1.0.0 where `'1-not-authorized'` cast straight to `1` and returned
+   tenant 1's documents. `scout-postgres:reindex --scope` validates its argument the same way.
+
 7. **Optional — wire an `EmbeddingProvider`** (`src/Contracts/EmbeddingProvider.php`):
    `embed(string $text): ?array`, `isReady(): bool`, `fingerprint(): non-empty-string`. The
    bound default, `Core45\ScoutPostgres\Embedding\NullEmbeddingProvider`
@@ -181,15 +182,24 @@ Follow in order; steps 6–7 are conditional.
 - **The default provider is inert.** `NullEmbeddingProvider` is bound unless the adopter binds
   their own; semantic search returns nothing until a real provider is bound, even after the
   backfill runs.
+- **A document whose `embedding_fingerprint` doesn't match the bound provider is excluded
+  from semantic results.** `EmbeddingProvider::fingerprint()` identifies the provider *and*
+  the model; `SemanticSearchService` filters on `embedding_fingerprint = ?`
+  (`src/Search/SemanticSearchService.php`), so switching providers or model versions silently
+  drops every previously-embedded document from the semantic branch until the backfill runs
+  again under the new fingerprint. `embed()` returning `null` for one document does not fail
+  the whole search — that document is simply excluded from the semantic branch.
 - **`whereNotIn()` is rejected, not silently ignored.** Scout `where()`/`whereIn()` compile to
   jsonb containment (and ORed containment) against the `filters` column in
-  `PostgresDocumentEngine`; containment has no negative form, so `whereNotIn()` throws rather
-  than producing a wrong result.
+  `PostgresDocumentEngine` (`src/Search/PostgresDocumentEngine.php`); containment has no
+  negative form, so `whereNotIn()` throws rather than producing a wrong result.
 - **Integer (bigint) primary keys only.** `searchable_id` is `unsignedBigInteger`, and ordering
   uses `array_position(?::bigint[], …)`. UUID and ULID models cannot be indexed in v0.1.
 - **Source models must carry the scope column themselves, under `mode => 'column'`.**
   Hydration filters the *source* model's table as well as `search_documents` — see C3 in the
-  ADR.
+  ADR. A model loaded via a partial `select()` that omits the scope column throws on
+  reconciliation rather than being treated as scopeless — an absent scope attribute is an
+  error, while a genuinely empty scope value is a different, valid case and is skipped.
 - **Source keys must be unique across scopes, not merely within one tenant.** The identity
   index on `search_documents` is `(searchable_type, searchable_id, locale)` and deliberately
   excludes the scope column in both modes (C8), so one model indexed under two tenants
@@ -206,7 +216,9 @@ load-bearing tenant-isolation guarantees, not style preferences.
   with the scope predicate dropped is a cross-tenant leak; a query forced to match nothing is a
   silent outage. Both look identical to the caller as "no results", which is exactly why
   neither is acceptable. `ScopeDefinition::requireColumn()` applies the same discipline one
-  level down.
+  level down. Scope resolution happens before the PostgreSQL availability check, so degrading
+  to empty results off a non-PostgreSQL connection never doubles as a way to skip scope
+  resolution.
 - **SC-2 — one `ScopeDefinition` for DDL and runtime.** `ScopeDefinition::fromConfig()`
   (`src/Scope/ScopeDefinition.php`) hydrates once into a singleton, bound in the service
   provider, that both the migration and every query-building consumer read. Never add a second
@@ -222,6 +234,10 @@ load-bearing tenant-isolation guarantees, not style preferences.
   in `PostgresSearchService` (`src/Search/PostgresSearchService.php` — `keyword()`, `trigram()`,
   `semantic()`) emits its own scope predicate. Do not collapse this into one shared outer
   `WHERE`: the repetition is defence in depth for tenant isolation.
+- **Documents are purged when their scope no longer exists.** Reconciliation does not assume
+  `ON DELETE CASCADE` has removed them — the package also supports no foreign key at all and
+  `ON DELETE SET NULL`, and both leave orphaned or unreachable rows if reconciliation skips the
+  explicit purge.
 
 ## Diagnosing "search returns nothing"
 
@@ -243,6 +259,9 @@ Work through in order:
    - Has `EmbeddingBackfill::run()` (or `scout-postgres:reindex` without `--no-embeddings`) run
      since the text last changed? Indexing nulls the vector on every text change; nothing else
      fills it back in.
+   - Does the stored `embedding_fingerprint` match the bound provider's `fingerprint()`? A
+     provider or model change silently excludes previously-embedded documents until they are
+     re-backfilled.
 
 ## Testing the package
 
@@ -266,5 +285,5 @@ process to get a table actually built with `scope.mode => 'none'`; sharing a pro
 `Unit,Feature` would leave it querying the already-scoped table, and single-tenant mode would
 go untested while the run still reported green.
 
-Quality gates before committing: `vendor/bin/pint --test` (Laravel preset plus
-`declare_strict_types` on every file) and `vendor/bin/phpstan analyse` (level 6 against `src/`).
+Quality gates before committing: `vendor/bin/pint --test` and `vendor/bin/phpstan analyse`
+(level 6 against `src/`).

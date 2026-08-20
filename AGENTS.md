@@ -3,7 +3,9 @@
 Agent-facing reference for integrating, configuring, or debugging this package. For adopter
 prose and rationale see `README.md`; for the tenancy design invariants see
 `docs/adr/0001-scope-abstraction-and-contracts.md`. A more detailed, skill-shaped version of
-this document lives at `skills/using-scout-postgres-hybrid/SKILL.md`.
+this document lives at `resources/boost/skills/scout-postgres-development/SKILL.md`, which is
+where Laravel Boost discovers it — `php artisan boost:install` offers it to an adopter's agent
+tooling from there.
 
 ## What this is
 
