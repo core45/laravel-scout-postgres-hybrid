@@ -14,10 +14,16 @@ use Core45\ScoutPostgres\Contracts\EmbeddingProvider;
  * degraded path and the pgvector SQL — the package's actual differentiator —
  * would go unproven while CI reported green.
  *
- * Deterministic rather than random, and derived from the text rather than from a
- * counter, so the same string always embeds to the same vector and two different
- * strings reliably do not. That is enough for a distance assertion to mean
- * something without depending on a network call or an API key.
+ * A hashed bag of words rather than random noise, because the distance has to
+ * carry meaning. A first attempt seeded a PRNG from the whole string, which made
+ * every distinct text mutually orthogonal — so a query never came within
+ * `min_similarity` of the document it was meant to match and the semantic branch
+ * correctly returned nothing. Bucketing tokens instead gives texts that share
+ * words a genuinely small cosine distance, which is the property these tests
+ * assert on.
+ *
+ * Normalised to unit length so cosine distance behaves the way pgvector's `<=>`
+ * expects, and deterministic so the same text always embeds identically.
  */
 final class FakeEmbeddings implements EmbeddingProvider
 {
@@ -28,23 +34,25 @@ final class FakeEmbeddings implements EmbeddingProvider
      */
     public function embed(string $text): ?array
     {
-        $normalized = mb_strtolower(trim($text));
+        $tokens = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY);
 
-        if ($normalized === '') {
+        if ($tokens === false || $tokens === []) {
             return null;
         }
 
-        // A hash-seeded unit-ish vector. Texts sharing a prefix land nearer each
-        // other than unrelated ones, which is all the ordering assertions need.
-        $seed = crc32($normalized);
-        $vector = [];
+        $vector = array_fill(0, $this->dimensions, 0.0);
 
-        for ($i = 0; $i < $this->dimensions; $i++) {
-            $seed = ($seed * 1103515245 + 12345) & 0x7FFFFFFF;
-            $vector[] = ($seed / 0x7FFFFFFF) - 0.5;
+        foreach ($tokens as $token) {
+            $vector[crc32($token) % $this->dimensions] += 1.0;
         }
 
-        return $vector;
+        $magnitude = sqrt(array_sum(array_map(static fn (float $v): float => $v * $v, $vector)));
+
+        if ($magnitude === 0.0) {
+            return null;
+        }
+
+        return array_map(static fn (float $v): float => $v / $magnitude, $vector);
     }
 
     public function isReady(): bool
