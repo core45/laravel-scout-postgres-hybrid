@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Core45\ScoutPostgres\Contracts\EmbeddingProvider;
 use Core45\ScoutPostgres\DTOs\SearchQuery;
+use Core45\ScoutPostgres\Embedding\EmbeddingBackfill;
 use Core45\ScoutPostgres\Scope\CrossScope;
 use Core45\ScoutPostgres\Search\PostgresSearchService;
 use Core45\ScoutPostgres\Search\SearchIndexer;
@@ -40,6 +41,11 @@ function indexFor(string $title, string $body, Tenant $tenant): Article
     ]);
 
     app(SearchIndexer::class)->reconcileModel($article);
+
+    // The indexer never writes vectors — embedding is a paid network round-trip
+    // and does not belong on the write path of every model save. The backfill is
+    // what fills them, so the semantic tests have to run it too.
+    app(EmbeddingBackfill::class)->run((int) $tenant->getKey());
 
     return $article;
 }

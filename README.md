@@ -281,6 +281,23 @@ class OpenAiEmbeddings implements EmbeddingProvider
 }
 ```
 
+**Vectors are written by a backfill, not by the indexer.** Indexing happens synchronously on
+every save; embedding is a paid, rate-limited network round-trip, and putting it on that path
+would mean a provider outage blocks every model write in your application. So the indexer nulls
+the vector whenever the text changes, and something else fills it in:
+
+```bash
+php artisan scout-postgres:reindex --scope=1        # reindexes, then embeds
+php artisan scout-postgres:reindex --no-embeddings  # skip the embedding pass
+```
+
+```php
+app(EmbeddingBackfill::class)->run($scope, limit: 1000);
+```
+
+Queue that after your sync job if you want vectors to appear without a reindex. Until something
+runs it, the semantic branch has no data and the engine is a two-branch hybrid.
+
 `fingerprint()` must change whenever the model does. It is stored beside every vector, and
 vectors from two different models are not comparable — a distance between them is a
 plausible-looking number that means nothing. A changed fingerprint marks rows stale instead.

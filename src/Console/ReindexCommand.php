@@ -7,6 +7,7 @@ namespace Core45\ScoutPostgres\Console;
 use Core45\ScoutPostgres\Contracts\DocumentType;
 use Core45\ScoutPostgres\Contracts\DocumentTypeRegistry;
 use Core45\ScoutPostgres\Contracts\SearchIndexable;
+use Core45\ScoutPostgres\Embedding\EmbeddingBackfill;
 use Core45\ScoutPostgres\Scope\ScopeDefinition;
 use Core45\ScoutPostgres\Search\SearchIndexer;
 use Core45\ScoutPostgres\Search\SearchReconciliation;
@@ -31,6 +32,8 @@ final class ReindexCommand extends Command
         {--scope=* : Scope keys to reindex. Required when scope.mode is "column".}
         {--type=* : Limit to these DocumentType values. Defaults to every registered type.}
         {--prune : Also delete documents whose source row no longer exists.}
+        {--no-embeddings : Skip the embedding backfill.}
+        {--embed-limit=1000 : Documents embedded per scope in one run.}
         {--chunk=200 : Source models loaded per batch.}';
 
     protected $description = 'Rebuild search_documents from the source models.';
@@ -40,6 +43,7 @@ final class ReindexCommand extends Command
         SearchReconciliation $reconciliation,
         DocumentTypeRegistry $registry,
         ScopeDefinition $scope,
+        EmbeddingBackfill $embeddings,
     ): int {
         if (! SearchIndexer::enabled()) {
             $this->error('Indexing is disabled: this engine requires a PostgreSQL connection.');
@@ -61,6 +65,14 @@ final class ReindexCommand extends Command
 
         foreach ($scopes as $key) {
             $this->reindexScope($indexer, $reconciliation, $types, $key, $scope);
+
+            // After reindexing, not before: reconciling nulls the vector of every
+            // document whose text changed, so embedding first would pay the
+            // provider for vectors this run is about to discard.
+            if (! $this->option('no-embeddings')) {
+                $embedded = $embeddings->run($key, (int) $this->option('embed-limit'));
+                $this->line("  embedded {$embedded} document(s)");
+            }
         }
 
         return self::SUCCESS;
