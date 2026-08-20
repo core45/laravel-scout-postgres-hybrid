@@ -8,8 +8,6 @@ use Core45\ScoutPostgres\Search\PostgresSearchService;
 use Core45\ScoutPostgres\Search\SearchIndexer;
 use Core45\ScoutPostgres\Tests\Fixtures\ArticleType;
 use Core45\ScoutPostgres\Tests\Fixtures\Models\Article;
-use Core45\ScoutPostgres\Tests\SingleTenantTestCase;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -19,8 +17,6 @@ use Illuminate\Support\Facades\Schema;
  * has no scope column, so any branch that still emits a scope predicate raises a
  * SQL error rather than quietly returning the wrong rows.
  */
-uses(SingleTenantTestCase::class, RefreshDatabase::class);
-
 it('creates no scope column at all', function (): void {
     expect(Schema::hasColumn('search_documents', 'tenant_id'))->toBeFalse()
         ->and(app(ScopeDefinition::class)->isScoped())->toBeFalse();
