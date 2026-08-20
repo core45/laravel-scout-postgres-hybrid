@@ -87,4 +87,12 @@ jobs:
         run: vendor/bin/pint --test
 
       - name: Run tests
-        run: vendor/bin/pest
+        run: vendor/bin/pest --testsuite=Unit,Feature
+
+      # A separate process on purpose. RefreshDatabase runs migrate:fresh once per
+      # process, so the single-tenant suite has to start its own to get a table
+      # built with scope.mode => none. Sharing the process would leave it querying
+      # the scoped table the Feature suite created, and the mode would go untested
+      # while still reporting green.
+      - name: Run tests (single-tenant)
+        run: vendor/bin/pest --testsuite=SingleTenant

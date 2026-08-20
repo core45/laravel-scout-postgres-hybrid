@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Core45\ScoutPostgres\Search;
 
 use Core45\ScoutPostgres\Contracts\DocumentType;
+use Core45\ScoutPostgres\Contracts\DocumentTypeRegistry;
 use Core45\ScoutPostgres\Contracts\ScopeRepository;
 use Core45\ScoutPostgres\Contracts\SearchIndexable;
 use Core45\ScoutPostgres\DTOs\SearchDocumentData;
@@ -64,6 +65,7 @@ final class SearchIndexer
     public function __construct(
         private readonly ScopeDefinition $scope,
         private readonly ?ScopeRepository $scopes = null,
+        private readonly ?DocumentTypeRegistry $types = null,
     ) {}
 
     /**
@@ -154,14 +156,16 @@ final class SearchIndexer
      * Saves the reload when the caller has the model in hand and knows it is
      * current — a `saved` observer, or a reindex command walking a cursor.
      *
-     * The host application read the type from a `SearchableType::forModel()`
-     * registry. `DocumentType` is an interface the adopter implements, so the
-     * package has no such registry and takes the type from the documents the
-     * model just produced instead. The consequence is stated rather than hidden:
-     * a model that produces **no** documents carries no type, so this method
-     * cannot purge it. Unpublishing through this path leaves the old rows in
-     * place; call {@see self::reconcile()} or {@see self::purge()}, which name the
-     * type explicitly, when the model may stop being indexable.
+     * The type normally comes from the documents the model just produced, which
+     * avoids a registry lookup on the hot path. When the model produces none
+     * there is nothing to read a type from, and that is exactly the case that
+     * must still delete rows — so the {@see DocumentTypeRegistry} answers instead.
+     *
+     * Without the registry bound this method cannot purge, and unpublishing
+     * through this path would silently leave the old rows findable. That is why
+     * the constructor's registry is optional in signature only: the provider
+     * always binds one, and an adopter constructing this class by hand should
+     * pass it.
      *
      * As in the source, the scope is read from the model itself rather than from
      * ambient state.
@@ -191,6 +195,16 @@ final class SearchIndexer
         $documents = $model->toSearchDocuments();
 
         if ($documents === []) {
+            // An empty return means "delete every row for this model", which is
+            // the contract's whole point: unpublishing and deleting converge on
+            // the same state. Reaching that requires a type, and there is no
+            // document left to read one from — so the registry answers instead.
+            // Returning early here, as this method first did, made unpublishing a
+            // silent no-op that left the document findable.
+            if ($this->types !== null) {
+                $this->purge($scope, $this->types->forModel($model), (int) $model->getKey());
+            }
+
             return;
         }
 

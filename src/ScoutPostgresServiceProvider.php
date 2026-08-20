@@ -7,10 +7,12 @@ namespace Core45\ScoutPostgres;
 use Core45\ScoutPostgres\Console\ReindexCommand;
 use Core45\ScoutPostgres\Contracts\DocumentTypeRegistry;
 use Core45\ScoutPostgres\Contracts\EmbeddingProvider;
+use Core45\ScoutPostgres\Contracts\ScopeRepository;
 use Core45\ScoutPostgres\Contracts\ScopeResolver;
 use Core45\ScoutPostgres\Embedding\NullEmbeddingProvider;
 use Core45\ScoutPostgres\Scope\ScopeDefinition;
 use Core45\ScoutPostgres\Search\PostgresDocumentEngine;
+use Core45\ScoutPostgres\Search\SearchIndexer;
 use Core45\ScoutPostgres\Support\ConfiguredDocumentTypes;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Scout\EngineManager;
@@ -18,9 +20,13 @@ use Laravel\Scout\EngineManager;
 /**
  * Registers the `postgres` Scout engine.
  *
- * P1: this provider publishes config and migrations, and resolves the scope
- * configuration into a `ScopeDefinition`. The `EngineManager::extend('postgres', …)`
- * registration lands in P5, once the ported engine from P2 exists to register.
+ * Publishes the config and both migrations, resolves the scope configuration into
+ * a `ScopeDefinition`, binds the document-type registry and an inert embedding
+ * provider, and registers the engine as the `postgres` Scout driver.
+ *
+ * What it deliberately does not bind is as important as what it does: nothing
+ * here supplies a ScopeResolver or a ScopeRepository. Both describe the adopter's
+ * tenancy, and a default that resolved some scope would defeat SC-1 exactly.
  */
 class ScoutPostgresServiceProvider extends ServiceProvider
 {
@@ -53,6 +59,18 @@ class ScoutPostgresServiceProvider extends ServiceProvider
             $types = is_array($types) ? array_values($types) : [];
 
             return new ConfiguredDocumentTypes($types);
+        });
+
+        // Constructed explicitly rather than left to autowiring, because two of its
+        // three dependencies are optional interfaces an adopter may never bind, and
+        // container resolution of an unbound one is not something to leave to
+        // chance in the class that performs every write.
+        $this->app->bind(SearchIndexer::class, function ($app): SearchIndexer {
+            return new SearchIndexer(
+                $app->make(ScopeDefinition::class),
+                $app->bound(ScopeRepository::class) ? $app->make(ScopeRepository::class) : null,
+                $app->make(DocumentTypeRegistry::class),
+            );
         });
 
         // Deliberately a default rather than a requirement. With no embedding API

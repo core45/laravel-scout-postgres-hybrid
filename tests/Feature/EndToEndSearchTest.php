@@ -52,22 +52,6 @@ it('indexes a model and finds it by an exact keyword', function (): void {
         ->and($results->hits[0]->searchableId)->toBe((int) $article->getKey());
 });
 
-it('finds a model through a typo, which is what the trigram branch is for', function (): void {
-    $article = indexArticle(['tenant_id' => $this->tenant->getKey()]);
-
-    $results = PostgresSearchService::for((int) $this->tenant->getKey())
-        ->trigram(SearchQuery::make(
-            term: 'yога',
-            locale: 'en',
-            types: [ArticleType::Article],
-        ));
-
-    // Deliberately loose: the point is that a near-miss reaches the row at all,
-    // not that a particular similarity score is stable across pg_trgm versions.
-    expect($results->hits)->not->toBeEmpty()
-        ->and($results->hits[0]->searchableId)->toBe((int) $article->getKey());
-})->skip('Cyrillic homoglyph fixture is not a stable trigram assertion; see the ASCII typo test below.');
-
 it('finds a model through an ascii typo', function (): void {
     $article = indexArticle(['tenant_id' => $this->tenant->getKey()]);
 
