@@ -35,6 +35,13 @@ First release. There is no prior history to list.
   platform-wide, cross-tenant read is allowed. It is constructed only via
   `CrossScope::platformWide(string $reason)`, so a bypass of scope isolation is
   deliberate and greppable rather than reachable by a stray boolean argument.
+- `EmbeddingBackfill`, which fills the vectors the indexer deliberately does not write.
+  Indexing runs synchronously on every model save, while embedding is a paid,
+  rate-limited network round-trip; inlining it would put a provider outage on the write
+  path of every model in the application. The indexer therefore nulls a vector whenever
+  the text changes, and the backfill replaces it — run by `scout-postgres:reindex`, or
+  queued by the adopter after their own sync job. Until something runs it, the semantic
+  branch has no data.
 - The `scout-postgres:reindex` console command, which rebuilds `search_documents` from
   the source models. Idempotent — it reconciles rather than inserts — so running it
   twice, or after a schema or config change, is the supported way to restate the corpus.
