@@ -11,9 +11,9 @@ result set:
 fused with **reciprocal rank fusion**, so a document that ranks moderately in all three beats
 one that spikes in a single branch.
 
-> **Status: pre-alpha, P0.** Nothing is implemented yet. This repository currently contains
-> the CI scaffold and the extension migration only. See the phase plan before relying on
-> anything here.
+> **Status: pre-alpha, P1.** No engine code is implemented yet. This repository currently
+> contains the CI scaffold, the extension migration, and the contracts the engine will be
+> built against. See the phase plan before relying on anything here.
 
 ## Why another Postgres Scout driver
 
@@ -63,6 +63,29 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS unaccent;
 ```
+
+## Adopter requirements
+
+Beyond the versions above, the engine makes four assumptions about the models you index. They
+are requirements rather than settings in v0.1, and each is a hard failure rather than a degraded
+result if it does not hold.
+
+- **Integer primary keys.** `searchable_id` is a `bigint`, and result ordering is built with
+  `array_position(?::bigint[], …)`. Models keyed by UUID or ULID cannot be indexed. Deriving the
+  cast from the model's key type is deferred to v0.2.
+- **Source models carry the scope column.** Under `mode => 'column'`, hydration filters the
+  source model's own table as well as the document table, so every indexed model needs the scope
+  column on its own table.
+- **Source keys are unique across scopes.** The identity index is
+  `(searchable_type, searchable_id, locale)` and deliberately excludes the scope, so that one
+  model indexed under two tenants surfaces as a conflict rather than as two silently divergent
+  rows. If your primary keys restart per tenant, v0.1 rejects the second tenant's rows.
+- **A resolvable scope, or none at all.** `mode => 'none'` is a configured state, not the absence
+  of one. Where a scope column is configured and no scope can be resolved, the engine throws. It
+  never widens to an unfiltered query and never returns an empty result set to cover the gap.
+
+The reasoning behind each, and the couplings they come from, is in
+[`docs/adr/0001-scope-abstraction-and-contracts.md`](docs/adr/0001-scope-abstraction-and-contracts.md).
 
 ## Single-tenant and multi-tenant
 
