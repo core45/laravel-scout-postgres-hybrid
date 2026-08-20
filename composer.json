@@ -1,0 +1,37 @@
+{
+    "name": "core45/laravel-scout-postgres-hybrid",
+    "description": "A Laravel Scout engine for PostgreSQL that fuses weighted tsvector full-text search, pg_trgm typo and diacritic tolerance, and pgvector semantic similarity with reciprocal rank fusion.",
+    "keywords": ["laravel", "scout", "postgres", "postgresql", "search", "full-text", "pgvector", "pg_trgm", "hybrid-search", "vector-search"],
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "illuminate/support": "^12.0|^13.0",
+        "illuminate/database": "^12.0|^13.0",
+        "illuminate/contracts": "^12.0|^13.0",
+        "laravel/scout": "^11.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.30.5",
+        "larastan/larastan": "^3.0",
+        "orchestra/testbench": "^10.0|^11.2",
+        "pestphp/pest": "^4.1|^5.1.1",
+        "pestphp/pest-plugin-laravel": "^4.0|^5.0.1"
+    },
+    "autoload": {
+        "psr-4": {"Core45\\ScoutPostgres\\": "src/"}
+    },
+    "autoload-dev": {
+        "psr-4": {"Core45\\ScoutPostgres\\Tests\\": "tests/"}
+    },
+    "extra": {
+        "laravel": {
+            "providers": ["Core45\\ScoutPostgres\\ScoutPostgresServiceProvider"]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {"pestphp/pest-plugin": true}
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

@@ -1,0 +1,8 @@
+/vendor
+/.phpunit.cache
+composer.lock
+/node_modules
+/.idea
+/graphify-out
+/.playwright-mcp
+.phpunit.result.cache

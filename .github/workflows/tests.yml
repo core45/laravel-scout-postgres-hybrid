@@ -1,0 +1,90 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        laravel: ['12.*', '13.*']
+        experimental: [false]
+        include:
+          # PHP 8.6 is not released yet; nightly builds it from master. Advisory
+          # only, so a break there never fails the build. Promote it to the php
+          # list above once 8.6 ships.
+          - php: 'nightly'
+            laravel: '13.*'
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    name: PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }}
+
+    services:
+      postgres:
+        # pgvector's image, not stock `postgres:17`. Not an optimisation — the
+        # suite cannot migrate without it. The extensions migration runs
+        # `CREATE EXTENSION IF NOT EXISTS vector`, and `IF NOT EXISTS` does not
+        # help when the extension is not installed in the image: PostgreSQL
+        # answers `extension "vector" is not available` and the migration fails.
+        # This is the same PostgreSQL 17 otherwise.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: testing
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_DATABASE: testing
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo, pdo_pgsql
+          coverage: none
+
+      - name: Install dependencies
+        env:
+          LARAVEL: ${{ matrix.laravel }}
+          EXPERIMENTAL: ${{ matrix.experimental }}
+        run: |
+          composer require "illuminate/support:$LARAVEL" --no-interaction --no-update
+          # No step-back script is needed here. The dev toolchain is declared as
+          # ranges (testbench ^10|^11, pest ^4|^5) precisely so Composer resolves
+          # each row on its own: testbench 11 requires laravel ^13.23 so the 12.*
+          # rows take testbench 10, and pest 5 requires php ^8.4 so the 8.3 rows
+          # take pest 4. Adding removals here would fight that resolution.
+          if [ "$EXPERIMENTAL" = "true" ]; then
+            # Parts of the toolchain declare an upper PHP bound and refuse to
+            # install on an unreleased version. This row is advisory and cannot
+            # fail the build, so ignore the platform bound and let the suite run
+            # against the new engine.
+            composer update --prefer-dist --no-interaction --ignore-platform-req=php
+          else
+            composer update --prefer-dist --no-interaction
+          fi
+
+      - name: Run Pint
+        run: vendor/bin/pint --test
+
+      - name: Run tests
+        run: vendor/bin/pest
