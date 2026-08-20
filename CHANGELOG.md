@@ -5,6 +5,46 @@ All notable changes to this package are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-20
+
+An independent adversarial review of 1.0.0 found nine defects, three of them
+high-impact and one of them a tenant-crossing bug. All are fixed here. **Anyone running
+1.0.0 in a multi-tenant configuration should upgrade.**
+
+### Fixed
+
+- **A malformed scope string could select a real tenant.** A scope passed as a string was
+  cast straight to `int`, and PHP casts `'1-not-authorized'` to `1` — so an unvalidated
+  value reaching `->options(['scope' => …])` returned tenant 1's documents, while `'acme'`
+  became `0`. Non-integer scopes now go through `ScopeResolver::normalize()`, which throws
+  for anything it does not recognise. `scout-postgres:reindex --scope` validates its
+  argument for the same reason: with `--prune` the old behaviour deleted a tenant's
+  documents on the strength of a typo.
+- **A model whose scope column was not loaded is no longer silently skipped.** A partial
+  `select()` leaves no scope attribute, which used to be read as "no scope", so deleting
+  such a model skipped the purge and left its document searchable indefinitely. An absent
+  attribute now throws; a scope that is genuinely empty is still skipped, which is a
+  different case and correctly not an error.
+- **Documents are purged when their scope no longer exists.** Reconciliation assumed
+  `ON DELETE CASCADE` had already removed them, but the package also supports no foreign
+  key at all and `ON DELETE SET NULL`. Under the first, a corpus outlived its tenant and
+  stayed searchable under an id an adopter might reuse; under the second, rows survived
+  with a null scope that no scoped query could ever reach again.
+- **Scope resolution now happens before the PostgreSQL availability check.** Degrading to
+  empty results off PostgreSQL is deliberate, but it must not double as a way to skip
+  scope resolution — with the checks in the old order, an unresolvable scope returned
+  empty instead of throwing whenever the connection was not PostgreSQL.
+
+### Added
+
+- `AGENTS.md` and `skills/using-scout-postgres-hybrid/SKILL.md`, agent-facing references
+  covering the integration checklist, the invariants, the traps that are easy to get wrong
+  (one model yields many documents; `[]` means delete; `DocumentType` must be compared by
+  `value()` and never by identity), and an ordered checklist for diagnosing an empty
+  result set.
+- Tests for every defect above. The suite missed them because it only ever passed valid
+  integer scopes and fully loaded models.
+
 ## [1.0.0] - 2026-08-20
 
 First release. There is no prior history to list.

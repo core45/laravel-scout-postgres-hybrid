@@ -36,6 +36,28 @@ final class UnresolvableScope extends RuntimeException implements ScoutPostgresE
         ));
     }
 
+    /**
+     * The scope column was not loaded on a model the package was asked to index,
+     * delete or reconcile.
+     *
+     * Distinct from a model whose scope is genuinely empty: that one is simply not
+     * indexable and is skipped. This is a model whose scope is unknowable, usually
+     * because it was loaded with a partial `select()`. Skipping it silently means a
+     * delete that never happens, and a document that stays searchable after its
+     * source row is gone.
+     */
+    public static function attributeMissing(string $model, string $column): self
+    {
+        return new self(sprintf(
+            'The scope column [%s] was not loaded on [%s], so its scope cannot be determined. '
+            .'Load the column (a partial select() is the usual cause), or call the explicitly '
+            .'scoped API. Refusing rather than guessing: skipping would silently leave the '
+            .'document in the index.',
+            $column,
+            $model,
+        ));
+    }
+
     public static function notScoped(): self
     {
         return new self(

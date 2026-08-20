@@ -175,6 +175,16 @@ final class SemanticSearchService
             ->select(['searchable_type', 'searchable_id', 'locale', 'title'])
             ->selectVectorDistance('embedding', $vector, 'vector_distance')
             ->whereNotNull('embedding')
+            // As load-bearing as whereNotNull() above, and excluding rows for the
+            // same reason. fingerprint() identifies provider *and* model, and
+            // vectors from two different models are not comparable — a distance
+            // between them is a plausible-looking number that means nothing.
+            // Without this, deploying model v2 with the same dimension count
+            // ranks v2 query vectors against every not-yet-backfilled v1 document
+            // vector, silently. An equality comparison rather than a
+            // "distinct from" one, so a row carrying a vector but no fingerprint
+            // fails closed.
+            ->where('embedding_fingerprint', $this->embeddings->fingerprint())
             // Ordering is wanted here: this method's whole product is "nearest
             // first". `order: false` belongs to the fused path, which ranks the
             // branch itself and does not come through this method.
@@ -302,12 +312,22 @@ final class SemanticSearchService
         }
 
         foreach ($query->rangeFilters as $key => $bounds) {
+            // Guarded exactly as `PostgresSearchService::filterPredicate()`
+            // guards it, and for the same reason: `filters` is arbitrary JSON,
+            // so one document storing `price: "POA"` among numbers would abort
+            // the whole search with *"invalid input syntax for type numeric"*.
+            // A non-numeric value is a row outside the range, not a fatal query.
+            // CASE rather than `regex AND cast` because PostgreSQL orders the
+            // operands of an AND by cost and may still evaluate the cast first.
+            // The key is bound twice — once for the guard, once for the cast.
+            $numeric = "(CASE WHEN filters->>? ~ '^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$' THEN (filters->>?)::numeric END)";
+
             if (isset($bounds['min'])) {
-                $builder->whereRaw('(filters->>?)::numeric >= ?', [$key, $bounds['min']]);
+                $builder->whereRaw($numeric.' >= ?', [$key, $key, $bounds['min']]);
             }
 
             if (isset($bounds['max'])) {
-                $builder->whereRaw('(filters->>?)::numeric <= ?', [$key, $bounds['max']]);
+                $builder->whereRaw($numeric.' <= ?', [$key, $key, $bounds['max']]);
             }
         }
 

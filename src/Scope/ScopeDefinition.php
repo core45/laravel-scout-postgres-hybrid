@@ -40,6 +40,29 @@ final readonly class ScopeDefinition
     public const ON_DELETE_ACTIONS = ['cascade', 'restrict', 'set null', 'no action'];
 
     /**
+     * PostgreSQL keywords refused as a scope column or table name.
+     *
+     * A deliberate subset of the keyword table, not a copy of it. Most of that
+     * table is *non-reserved* — `name`, `value`, `type`, `key`, `status`, `level`
+     * — and those work perfectly well as bare identifiers today, so refusing them
+     * would reject configurations that are already running for no gain. What is
+     * listed here is the reserved statement vocabulary: words that cannot appear
+     * unquoted in the raw SQL this package interpolates them into, and that no
+     * adopter plausibly chose as a scope column name. A reserved word missing
+     * from this list still fails, just later and less helpfully.
+     *
+     * @var list<string>
+     */
+    public const RESERVED_WORDS = [
+        'all', 'and', 'as', 'asc', 'both', 'case', 'cast', 'check', 'collate', 'column',
+        'constraint', 'create', 'default', 'desc', 'distinct', 'do', 'else', 'end', 'except',
+        'false', 'for', 'foreign', 'from', 'grant', 'group', 'having', 'in', 'index', 'inner',
+        'into', 'is', 'join', 'left', 'like', 'limit', 'not', 'null', 'offset', 'on', 'only',
+        'or', 'order', 'outer', 'primary', 'references', 'returning', 'right', 'select', 'similar',
+        'table', 'then', 'to', 'true', 'union', 'unique', 'user', 'using', 'when', 'where', 'with',
+    ];
+
+    /**
      * @param  self::MODE_*  $mode
      * @param  ?non-empty-string  $column  null in `none` mode
      * @param  ?non-empty-string  $foreignTable  null when no foreign key is created
@@ -233,10 +256,54 @@ final readonly class ScopeDefinition
         }
     }
 
+    /**
+     * Accept only names that mean the same thing quoted and unquoted.
+     *
+     * The published migration goes through Laravel's schema builder, which quotes
+     * every identifier, while the search and upsert SQL interpolates the same name
+     * unquoted. PostgreSQL folds an unquoted identifier to lowercase, so the two
+     * halves only agree for a name that is already lowercase: `Tenant_ID` creates
+     * a column called `"Tenant_ID"` that every raw query then looks for as
+     * `tenant_id` and fails to find. A reserved word round-trips no better — bare
+     * `select` is a syntax error wherever the raw SQL puts it.
+     *
+     * Neither is an injection hole; punctuation is what an injection needs and the
+     * pattern has always refused it. These are names that produce a schema the
+     * package cannot query, which is worth catching at boot rather than on the
+     * adopter's first search.
+     *
+     * The messages are built here rather than through
+     * `InvalidScopeConfiguration::invalidIdentifier()`, whose text names the older,
+     * case-insensitive pattern and would tell an adopter that `Tenant_ID` matches
+     * the rule being used to reject it. Nothing calls that factory any more; its
+     * message describes a rule this method no longer applies.
+     */
     private static function assertIdentifier(string $key, string $value): void
     {
-        if (preg_match('/^[a-z_][a-z0-9_$]*$/i', $value) !== 1) {
-            throw InvalidScopeConfiguration::invalidIdentifier($key, $value);
+        if (preg_match('/^[a-z_][a-z0-9_$]*$/', $value) !== 1) {
+            throw new InvalidScopeConfiguration(sprintf(
+                'scout-postgres.scope.%s must be a lowercase unquoted PostgreSQL identifier matching '
+                .'/^[a-z_][a-z0-9_$]*$/, got string(%s). Write it in snake_case — "tenant_id", not '
+                .'"Tenant_ID". The value is interpolated into DDL and into raw SQL rather than escaped, '
+                .'and PostgreSQL lowercases an unquoted name, so anything with an uppercase letter names '
+                .'one column in the migration and a different one in every query.',
+                $key,
+                $value,
+            ));
+        }
+
+        if (in_array($value, self::RESERVED_WORDS, true)) {
+            throw new InvalidScopeConfiguration(sprintf(
+                'scout-postgres.scope.%s is string(%s), a reserved PostgreSQL keyword. Choose a name '
+                .'that does not collide with the SQL grammar — "%s_id" or "owner_%s" rather than "%s". '
+                .'The value is interpolated unquoted into the search and upsert statements, where a '
+                .'keyword is a syntax error rather than a column.',
+                $key,
+                $value,
+                $value,
+                $value,
+                $value,
+            ));
         }
     }
 }

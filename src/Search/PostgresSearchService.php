@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Core45\ScoutPostgres\Search;
 
 use Core45\ScoutPostgres\Contracts\DocumentType;
+use Core45\ScoutPostgres\Contracts\EmbeddingProvider;
 use Core45\ScoutPostgres\DTOs\SearchQuery;
 use Core45\ScoutPostgres\DTOs\SearchResults;
 use Core45\ScoutPostgres\Exceptions\UnresolvableScope;
@@ -233,8 +234,23 @@ final class PostgresSearchService
      * because the callers that need a builder rather than a collection are
      * exactly the ones that `paginate()` — and a paginator discards any order
      * reimposed in PHP afterwards. `array_position` over the id list is the
-     * only ordering that survives it. A caller that wants a different sort
-     * (price, date) simply adds its own `orderBy`, which takes precedence.
+     * only ordering that survives it.
+     *
+     * **Relevance is the primary sort and a caller's own `orderBy()` is a
+     * tie-breaker, not a replacement.** It is added to the builder returned
+     * here, so it lands *after* the `array_position` term and only separates
+     * documents the fusion scored identically. A caller wanting its own sort to
+     * lead must call `reorder()` on this builder first.
+     *
+     * That is a decision, not an oversight. Making a caller's ordering primary
+     * from inside this method is reachable — deferring the `array_position`
+     * term to a `beforeQuery()` callback would append it at execution time,
+     * after anything the caller added. It is rejected because
+     * `applyBeforeQueryCallbacks()` also fires on `getCountForPagination()`,
+     * which clones the builder without orders and consumes the callback list:
+     * the page query would then silently lose relevance ordering altogether.
+     * Trading a documented tie-breaker for a framework-internals-dependent
+     * failure that no assertion here would see is the worse deal.
      *
      * C4 pins v0.1 to integer keys, so the cast is `?::bigint[]` rather than
      * something derived from the model's key type.
@@ -569,6 +585,22 @@ final class PostgresSearchService
      * while matches exist. That is a correctness property, not a speed one
      * (D1).
      *
+     * `embedding_fingerprint = ?` is as load-bearing as `embedding IS NOT NULL`
+     * and excludes rows for the same reason. `EmbeddingProvider::fingerprint()`
+     * identifies provider *and* model, and vectors from two different models are
+     * not comparable — a distance between them is a plausible-looking number
+     * that means nothing. Without this predicate, deploying model v2 with the
+     * same dimension count ranks v2 query vectors against every not-yet-backfilled
+     * v1 document vector, and the ranking is meaningless with no error anywhere.
+     * `= ?` rather than `IS NOT DISTINCT FROM`, so a row carrying a vector but no
+     * fingerprint fails closed.
+     *
+     * The provider is resolved from the container here rather than taken in the
+     * constructor, the same way `semantic()` resolves `SemanticSearchService`:
+     * this branch is reachable via `hybrid($query, $vector)` with a caller-supplied
+     * vector, which never touches the provider otherwise, and the binding is
+     * unconditional (`bindIf` to `NullEmbeddingProvider`).
+     *
      * @param  list<float>|null  $vector
      */
     private function semanticBranch(SearchQuery $query, int $limit, ?array $vector): ?SearchBranch
@@ -595,22 +627,30 @@ final class PostgresSearchService
 
         $encoded = json_encode($vector, JSON_THROW_ON_ERROR);
 
+        $fingerprint = app(EmbeddingProvider::class)->fingerprint();
+
         $sql = "
             SELECT searchable_type, searchable_id, locale, title,
                    (1 - (embedding <=> ?::vector)) AS rank
               FROM search_documents
              WHERE {$scopeSql}{$localeSql}{$filterSql}
                AND embedding IS NOT NULL
+               AND embedding_fingerprint = ?
                AND (embedding <=> ?::vector) <= ?
              ORDER BY embedding <=> ?::vector, searchable_id
              LIMIT ?
         ";
 
+        // One binding per placeholder, in placeholder order: the SELECT vector,
+        // then the WHERE predicates left to right, then ORDER BY, then LIMIT.
+        // A fragment added without its binding shifts every later value by one
+        // and PostgreSQL raises nothing — it simply compares the wrong pair.
         $bindings = [
             $encoded,
             ...$scopeBindings,
             ...$localeBindings,
             ...$filterBindings,
+            $fingerprint,
             $encoded,
             1 - $minSimilarity,
             $encoded,
@@ -766,14 +806,36 @@ final class PostgresSearchService
             // Cast rather than compared as text: `'9' > '10'` is true for
             // strings and false for numbers, and a timestamp filter compared
             // lexically silently drops everything on a digit boundary.
+            //
+            // Guarded, because `filters` is arbitrary JSON: one document storing
+            // `price: "POA"` while the rest store numbers makes a bare
+            // `(filters->>'price')::numeric` abort the entire search with
+            // *"invalid input syntax for type numeric"*. A non-numeric value is
+            // a row that does not match the range, not a fatal query.
+            //
+            // CASE rather than `regex AND cast`: PostgreSQL orders the operands
+            // of an AND by estimated cost and gives no left-to-right guarantee,
+            // so the cast can still be evaluated first and still throw. CASE is
+            // the documented construct with a defined evaluation order.
+            //
+            // A regex on the text rather than `jsonb_typeof(filters->?) =
+            // 'number'`, which would newly exclude a document storing `"20"` as
+            // a JSON string — a value that casts fine today. The exponent group
+            // is not decoration: `json_encode(1.0e+25)` writes `1.0e+25`, which
+            // `::numeric` accepts, and a pattern that rejected it would turn the
+            // crash into a silent missing row.
+            $numeric = "(CASE WHEN filters->>? ~ '^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$' THEN (filters->>?)::numeric END)";
+
             if (isset($bounds['min'])) {
-                $clauses[] = '(filters->>?)::numeric >= ?';
-                array_push($bindings, $key, $bounds['min']);
+                $clauses[] = $numeric.' >= ?';
+                // The key is bound twice — once for the guard, once for the
+                // cast. Dropping either shifts every later binding by one.
+                array_push($bindings, $key, $key, $bounds['min']);
             }
 
             if (isset($bounds['max'])) {
-                $clauses[] = '(filters->>?)::numeric <= ?';
-                array_push($bindings, $key, $bounds['max']);
+                $clauses[] = $numeric.' <= ?';
+                array_push($bindings, $key, $key, $bounds['max']);
             }
         }
 

@@ -12,6 +12,7 @@ use Core45\ScoutPostgres\Scope\ScopeDefinition;
 use Core45\ScoutPostgres\Search\SearchIndexer;
 use Illuminate\Contracts\Events\ShouldHandleEventsAfterCommit;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Keeps `search_documents` in step with the adopter's indexable models.
@@ -65,12 +66,29 @@ class SearchDocumentObserver implements ShouldHandleEventsAfterCommit
         $scope = null;
 
         if ($this->scope->isScoped()) {
-            $value = $model->getAttribute($this->scope->requireColumn());
+            $column = $this->scope->requireColumn();
+
+            // Absent is not empty. A model loaded with a partial `select()` has no
+            // scope attribute at all, and dispatching nothing for it means a delete
+            // that never reaches the index. Throwing inside a model event is
+            // disruptive, so this fails loudly in the log rather than silently — the
+            // indexer itself throws on the same condition.
+            if (! array_key_exists($column, $model->getAttributes())) {
+                Log::warning('SearchDocumentObserver: scope column not loaded, skipping index update.', [
+                    'model' => $model::class,
+                    'key' => $model->getKey(),
+                    'column' => $column,
+                ]);
+
+                return;
+            }
+
+            $value = $model->getAttribute($column);
             $scope = is_numeric($value) ? (int) $value : 0;
 
             if ($scope === 0) {
-                // A model with no scope has no place in a scoped corpus, and a job
-                // dispatched for it could only ever fail.
+                // A model whose scope is genuinely empty was never assigned to a
+                // tenant, so it has no place in a scoped corpus.
                 return;
             }
         }

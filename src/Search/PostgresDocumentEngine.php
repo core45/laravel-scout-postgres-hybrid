@@ -325,6 +325,13 @@ final class PostgresDocumentEngine extends Engine implements PaginatesEloquentMo
      */
     private function execute(Builder $builder, int $limit): SearchResults
     {
+        // Scope first, availability second. Degrading to empty results off
+        // PostgreSQL is deliberate, but it must not double as a way to skip scope
+        // resolution: with the checks the other way round, an unresolvable scope
+        // returned empty instead of throwing whenever the connection happened not
+        // to be PostgreSQL, which is the "never quietly empty" half of SC-1.
+        $this->requireScope($builder);
+
         if (! PostgresSearchService::available()) {
             return SearchResults::empty();
         }
@@ -420,12 +427,20 @@ final class PostgresDocumentEngine extends Engine implements PaginatesEloquentMo
             return $explicit;
         }
 
-        if (is_string($explicit) && $explicit !== '') {
-            return (int) $explicit;
-        }
+        if ($explicit !== null) {
+            // Everything that is not already an int goes through the adopter's
+            // resolver, including strings.
+            //
+            // This used to `(int)` a non-empty string directly, which was a
+            // tenant-crossing bug rather than a convenience: PHP casts
+            // "1-not-authorized" to 1, so a caller passing an unvalidated request
+            // value got a real, wrong tenant's documents, and "acme" became 0.
+            // Only the resolver knows which strings denote a scope, and SC-1
+            // requires it to throw for the ones that do not.
+            if ($this->resolver === null) {
+                throw UnresolvableScope::noAmbientScope();
+            }
 
-        if ($explicit !== null && $this->resolver !== null) {
-            // A tenant model, or whatever else the adopter's resolver understands.
             return $this->resolver->normalize($explicit);
         }
 
@@ -439,8 +454,17 @@ final class PostgresDocumentEngine extends Engine implements PaginatesEloquentMo
     /**
      * The scope a model belongs to, read from its own scope column.
      *
-     * Returns null when the corpus is unscoped, or when the model carries no
-     * usable value — the caller decides what to do about the latter.
+     * Returns null when the corpus is unscoped, or when the model genuinely holds
+     * no scope — a row never assigned to a tenant.
+     *
+     * Throws when the attribute is *absent* rather than empty, which is a
+     * different thing entirely and used to be silently treated as "no scope". A
+     * model loaded with `select('id')` has no scope attribute, so deleting it
+     * skipped the purge and left its document searchable for ever. The engine
+     * cannot know the scope of a model it was handed without one, and guessing is
+     * exactly what SC-1 forbids.
+     *
+     * @throws UnresolvableScope when the scope column was not loaded
      */
     private function scopeOf(Model $model): ?int
     {
@@ -448,7 +472,13 @@ final class PostgresDocumentEngine extends Engine implements PaginatesEloquentMo
             return null;
         }
 
-        $value = $model->getAttribute($this->scope->requireColumn());
+        $column = $this->scope->requireColumn();
+
+        if (! array_key_exists($column, $model->getAttributes())) {
+            throw UnresolvableScope::attributeMissing($model::class, $column);
+        }
+
+        $value = $model->getAttribute($column);
 
         return is_numeric($value) && (int) $value !== 0 ? (int) $value : null;
     }

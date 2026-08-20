@@ -129,9 +129,19 @@ final class SearchIndexer
         // rather than fail. In an unscoped corpus `$scope` is null and the guard
         // does not apply at all.
         if ($scope !== null && $this->scopes?->exists($scope) === false) {
-            // The scope column is typically cascadeOnDelete, so the rows went
-            // with the scope. Nothing to reconcile, and resolving documents
-            // below would throw on the missing tenant.
+            // The scope is gone, so its documents must go too — and this deletes
+            // them rather than assuming the database already has.
+            //
+            // Returning early was only correct under `ON DELETE CASCADE`. The
+            // package also supports `foreign_key => false` and `on_delete =>
+            // 'set null'`: with no foreign key the corpus simply survived its
+            // tenant, and stayed searchable under a key an adopter may later
+            // reuse; with SET NULL the rows survived with a null scope, which
+            // every scoped API filters out, so nothing could reach them again.
+            // Purging is right in all three configurations, and under cascade it
+            // is merely a no-op against rows that are already gone.
+            $this->purge($scope, $type, $id);
+
             return;
         }
 
@@ -184,10 +194,23 @@ final class SearchIndexer
             // because an unscoped corpus has no such column, and `(int) null` is
             // 0 — ungated, every single-tenant call would return here having
             // indexed nothing.
-            $scope = (int) $model->getAttribute($this->scope->requireColumn());
+            $column = $this->scope->requireColumn();
+
+            // An *absent* attribute is not an empty one. A model loaded with a
+            // partial `select()` carries no scope column, and treating that as
+            // "no scope" made this a silent no-op — so deleting such a model left
+            // its document searchable for ever. The scope is unknowable here, and
+            // SC-1 says refuse rather than guess.
+            if (! array_key_exists($column, $model->getAttributes())) {
+                throw UnresolvableScope::attributeMissing($model::class, $column);
+            }
+
+            $scope = (int) $model->getAttribute($column);
 
             if ($scope === 0) {
-                // A model with no scope cannot be placed in a scoped index.
+                // A model whose scope is genuinely empty was never assigned to a
+                // tenant, so it has no place in a scoped corpus. Distinct from the
+                // case above, and correctly a skip rather than a throw.
                 return;
             }
         }

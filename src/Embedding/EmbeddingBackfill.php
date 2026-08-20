@@ -78,7 +78,7 @@ final class EmbeddingBackfill
                 continue;
             }
 
-            $embedded += $this->store((int) $row->id, $vector, $fingerprint);
+            $embedded += $this->store((int) $row->id, $hash, $scope, $vector, $fingerprint);
         }
 
         return $embedded;
@@ -104,19 +104,39 @@ final class EmbeddingBackfill
     }
 
     /**
+     * Write one vector back, onto the row that was read and no other.
+     *
+     * The provider call between `pending()` and here is a network round-trip, and
+     * the row can change under it. An edit rewrites the text; an upsert can even
+     * move the row to another scope while keeping its id. Matching on `id` alone
+     * would then write a vector computed from text the row no longer holds — and,
+     * in the worst case, under a tenant whose corpus this run never read.
+     *
+     * So the update repeats the state that was read: the content hash, and the
+     * scope predicate whenever the corpus is scoped. A row that moved simply is
+     * not updated, and the next run picks it up with its current text, which is
+     * why this returns the affected count rather than assuming success — the
+     * caller's tally must count rows actually written.
+     *
      * @param  list<float>  $vector
+     * @return int 1 when the row was written, 0 when it changed under the worker
      */
-    private function store(int $id, array $vector, string $fingerprint): int
+    private function store(int $id, string $contentHash, ?int $scope, array $vector, string $fingerprint): int
     {
         // Encoded as pgvector's own text form and cast, rather than bound as an
         // array: there is no PDO type for `vector`, and the cast is what the
         // column's input function expects.
         $encoded = '['.implode(',', array_map(static fn (float $v): string => (string) $v, $vector)).']';
 
-        return DB::update(
-            'UPDATE search_documents SET embedding = ?::vector, embedding_fingerprint = ? WHERE id = ?',
-            [$encoded, $fingerprint, $id],
-        );
+        $sql = 'UPDATE search_documents SET embedding = ?::vector, embedding_fingerprint = ? WHERE id = ? AND content_hash = ?';
+        $bindings = [$encoded, $fingerprint, $id, $contentHash];
+
+        if ($this->scope->isScoped()) {
+            $sql .= ' AND '.$this->scope->requireColumn().' = ?';
+            $bindings[] = $scope;
+        }
+
+        return DB::update($sql, $bindings);
     }
 
     private function requireScope(?int $scope): ?int

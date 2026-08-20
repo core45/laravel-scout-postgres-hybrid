@@ -208,6 +208,21 @@ final class ReindexCommand extends Command
             return null;
         }
 
-        return array_map(static fn (string $key): int => (int) $key, $given);
+        $keys = [];
+
+        foreach ($given as $key) {
+            // Validated rather than cast. `(int) '1garbage'` is 1, so the previous
+            // cast turned a typo into a real tenant — and with --prune that meant
+            // deleting a tenant's documents on the strength of a malformed argument.
+            if (! ctype_digit($key)) {
+                $this->error("--scope must be an integer key, got [{$key}].");
+
+                return null;
+            }
+
+            $keys[] = (int) $key;
+        }
+
+        return $keys;
     }
 }
