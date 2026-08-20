@@ -64,6 +64,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Document types
+    |--------------------------------------------------------------------------
+    |
+    | The kinds of thing this application indexes. Each entry is a class
+    | implementing Core45\ScoutPostgres\Contracts\DocumentType; a backed enum is
+    | expanded through ::cases(), anything else is constructed with no arguments.
+    |
+    |   'types' => [App\Enums\SearchableType::class],
+    |
+    | The package needs the full set for three things an interface cannot answer
+    | on its own: which type a given model is indexed as, which type a stored
+    | `searchable_type` string refers to, and what "every type" means for a
+    | platform-wide count or an orphan sweep.
+    |
+    | Ships empty. Until at least one type is registered the engine can index
+    | nothing, which is the correct default for a package that cannot know an
+    | adopter's domain.
+    |
+    */
+
+    'types' => [],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache
     |--------------------------------------------------------------------------
     |

@@ -6,3 +6,11 @@ parameters:
     paths:
         - src
     treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # SearchableWithoutSyncing is applied by the adopter to their own models,
+        # so nothing inside this package ever uses it and PHPStan cannot analyse
+        # a trait it sees no consumer for. Narrowed to this one trait rather than
+        # silencing the rule, so a genuinely dead trait added later still fails.
+        -
+            identifier: trait.unused
+            path: src/Concerns/SearchableWithoutSyncing.php

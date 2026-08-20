@@ -33,6 +33,7 @@ return new class extends Migration
             $table->string('title');
             $table->text('body')->nullable();
             $table->string('locale', 10)->default('en');
+            $table->boolean('published')->default(true);
             $table->timestamps();
         });
     }
