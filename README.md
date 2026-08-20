@@ -181,6 +181,12 @@ Bind both in a service provider. The package ships **no default** for either: a 
 resolved *some* scope is exactly the failure mode the isolation rules exist to prevent, so
 their absence throws where a wrong guess would not.
 
+A model handed to the indexer, the observer, or Scout's `unsearchable()` path must carry the
+scope column among its loaded attributes. A partial `select()` that omits it now throws, since
+an attribute that was never loaded cannot be told apart from one that is genuinely empty without
+asking loudly rather than guessing; a model whose scope value **is** genuinely empty is still
+skipped, which is a different case.
+
 ### 4. Search
 
 ```php
@@ -188,6 +194,12 @@ Product::search('yoga mat')->get();
 Product::search('yoga mat')->options(['scope' => $tenant->id])->paginate(20);
 Product::search('yoga mat')->where('brand_id', 7)->whereIn('size', ['M', 'L'])->get();
 ```
+
+`->options(['scope' => …])` accepts an `int` outright; anything else is passed to the bound
+`ScopeResolver::normalize()`, which throws for a value it does not recognise. A numeric-looking
+string is no longer cast: casting `'1-not-authorized'` to `1` used to hand back a real tenant's
+documents on the strength of a typo, so throwing here is the deliberate fix, not a strictness
+regression.
 
 Or reach the branches directly, which is what the Scout engine does internally:
 
@@ -246,6 +258,10 @@ php artisan scout-postgres:reindex --scope=1 --prune
 php artisan scout-postgres:reindex            # single-tenant
 ```
 
+`--scope` accepts only integer keys and rejects anything else outright rather than casting it —
+casting a malformed key was exactly the tenant-crossing bug this release closed, and `--prune`
+made it a destructive one.
+
 Suppress indexing during a bulk import, then reindex once:
 
 ```php
@@ -300,7 +316,12 @@ runs it, the semantic branch has no data and the engine is a two-branch hybrid.
 
 `fingerprint()` must change whenever the model does. It is stored beside every vector, and
 vectors from two different models are not comparable — a distance between them is a
-plausible-looking number that means nothing. A changed fingerprint marks rows stale instead.
+plausible-looking number that means nothing. Semantic search filters on it: a document whose
+stored `embedding_fingerprint` does not match the currently bound provider's is **excluded**
+from semantic results, not merely ranked lower. So changing embedding model degrades semantic
+recall until the backfill has re-embedded the corpus under the new fingerprint — correct,
+since vectors from the old model are not comparable to the new one, but plan the backfill run
+around the switch rather than being surprised by it.
 
 Set `SEARCH_EMBEDDING_DIMENSIONS` to your model's width **before** migrating; the column is a
 typed `vector(N)`.
@@ -331,6 +352,12 @@ The array is hydrated once into a `ScopeDefinition` value object that the migrat
 query read, so a table built in one mode cannot be queried in the other. A mistyped mode throws
 at boot rather than quietly becoming "search everything".
 
+`column` must be a lowercase, unquoted identifier and not a reserved SQL keyword —
+`tenant_id`, not `Tenant_ID` or `user`. The published migration goes through Laravel's schema
+builder, which quotes every identifier, while the search and upsert SQL interpolates the same
+name unquoted; PostgreSQL folds an unquoted name to lowercase, so an uppercase column name
+creates a column the raw queries can never find. Both are rejected at boot.
+
 `mode => 'none'` is a configured state, not the absence of configuration. Where a scope column
 **is** configured and no scope can be resolved, the engine throws. It never widens to an
 unfiltered query and never returns an empty result to cover the gap — both look identical to
@@ -356,8 +383,10 @@ degraded result if it does not hold.
 
 - **Integer primary keys.** `searchable_id` is a `bigint` and ordering uses
   `array_position(?::bigint[], …)`. UUID and ULID models cannot be indexed.
-- **Source models carry the scope column** under `mode => 'column'`, because hydration filters
-  the source table as well as the document table.
+- **Source models carry the scope column, loaded**, under `mode => 'column'`, because hydration
+  filters the source table as well as the document table. A partial `select()` that omits the
+  column throws rather than silently skipping the operation; a model whose scope value is
+  genuinely empty is still skipped.
 - **Source keys are unique across scopes.** The identity index is
   `(searchable_type, searchable_id, locale)` and deliberately excludes the scope, so one model
   indexed under two tenants surfaces as a conflict rather than two silently divergent rows.

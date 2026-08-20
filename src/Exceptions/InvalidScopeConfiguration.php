@@ -42,14 +42,40 @@ final class InvalidScopeConfiguration extends InvalidArgumentException implement
         );
     }
 
+    /**
+     * The identifier pattern is case-**sensitive** and stated here in one place.
+     *
+     * It was `/…/i` in 1.0.0, which accepted `Tenant_ID`. That could never work:
+     * the schema builder quotes identifiers while the engine's raw SQL does not,
+     * so the migration created `"Tenant_ID"` and every query looked for the
+     * folded `tenant_id` and failed with "column does not exist". Uppercase is now
+     * rejected at boot, where the message can say what to use instead.
+     */
     public static function invalidIdentifier(string $key, mixed $value): self
     {
         return new self(sprintf(
-            'scout-postgres.scope.%s must be an unquoted PostgreSQL identifier matching '
-            .'/^[a-z_][a-z0-9_$]*$/i, got %s. The value is interpolated into DDL, so it is validated '
-            .'rather than escaped.',
+            'scout-postgres.scope.%s must be a lowercase unquoted PostgreSQL identifier matching '
+            .'/^[a-z_][a-z0-9_$]*$/, got %s. Write it in snake_case — "tenant_id", not "Tenant_ID". '
+            .'The value is interpolated into DDL and into raw SQL rather than escaped, and PostgreSQL '
+            .'lowercases an unquoted name, so anything with an uppercase letter names one column in '
+            .'the migration and a different one in every query.',
             $key,
             self::describe($value),
+        ));
+    }
+
+    public static function reservedIdentifier(string $key, string $value): self
+    {
+        return new self(sprintf(
+            'scout-postgres.scope.%s is string(%s), a reserved PostgreSQL keyword. Choose a name '
+            .'that does not collide with the SQL grammar — "%s_id" or "owner_%s" rather than "%s". '
+            .'The value is interpolated unquoted into the search and upsert statements, where a '
+            .'keyword is a syntax error rather than a column.',
+            $key,
+            $value,
+            $value,
+            $value,
+            $value,
         ));
     }
 

@@ -272,38 +272,18 @@ final readonly class ScopeDefinition
      * package cannot query, which is worth catching at boot rather than on the
      * adopter's first search.
      *
-     * The messages are built here rather than through
-     * `InvalidScopeConfiguration::invalidIdentifier()`, whose text names the older,
-     * case-insensitive pattern and would tell an adopter that `Tenant_ID` matches
-     * the rule being used to reject it. Nothing calls that factory any more; its
-     * message describes a rule this method no longer applies.
+     * Both messages live on `InvalidScopeConfiguration`, alongside every other
+     * config rejection, so an adopter reading that class sees the whole set of
+     * reasons a scope config can be refused in one place.
      */
     private static function assertIdentifier(string $key, string $value): void
     {
         if (preg_match('/^[a-z_][a-z0-9_$]*$/', $value) !== 1) {
-            throw new InvalidScopeConfiguration(sprintf(
-                'scout-postgres.scope.%s must be a lowercase unquoted PostgreSQL identifier matching '
-                .'/^[a-z_][a-z0-9_$]*$/, got string(%s). Write it in snake_case — "tenant_id", not '
-                .'"Tenant_ID". The value is interpolated into DDL and into raw SQL rather than escaped, '
-                .'and PostgreSQL lowercases an unquoted name, so anything with an uppercase letter names '
-                .'one column in the migration and a different one in every query.',
-                $key,
-                $value,
-            ));
+            throw InvalidScopeConfiguration::invalidIdentifier($key, $value);
         }
 
         if (in_array($value, self::RESERVED_WORDS, true)) {
-            throw new InvalidScopeConfiguration(sprintf(
-                'scout-postgres.scope.%s is string(%s), a reserved PostgreSQL keyword. Choose a name '
-                .'that does not collide with the SQL grammar — "%s_id" or "owner_%s" rather than "%s". '
-                .'The value is interpolated unquoted into the search and upsert statements, where a '
-                .'keyword is a syntax error rather than a column.',
-                $key,
-                $value,
-                $value,
-                $value,
-                $value,
-            ));
+            throw InvalidScopeConfiguration::reservedIdentifier($key, $value);
         }
     }
 }

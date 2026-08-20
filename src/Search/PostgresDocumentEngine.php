@@ -601,10 +601,15 @@ final class PostgresDocumentEngine extends Engine implements PaginatesEloquentMo
     }
 
     /**
-     * A caller's orderBy() applies to the hydrated models, replacing relevance
-     * order. Applied here rather than ignored: the columns are real columns on the
-     * model's own table, and silently dropping an explicit ordering is the kind of
-     * quiet wrongness this stack keeps paying for.
+     * A caller's orderBy() applies to the hydrated models as a **tie-breaker**,
+     * after relevance. Applied here rather than ignored: the columns are real
+     * columns on the model's own table, and silently dropping an explicit ordering
+     * is the kind of quiet wrongness this stack keeps paying for.
+     *
+     * This docblock previously claimed the caller's ordering *replaced* relevance
+     * order, which was never true — `hydrateQuery()` adds its `array_position()`
+     * term first, so these are appended behind it. A caller who genuinely wants
+     * relevance discarded should call `reorder()` in a `query()` callback.
      *
      * @param  Builder<covariant Model>  $builder
      * @param  EloquentBuilder<covariant Model>  $query
